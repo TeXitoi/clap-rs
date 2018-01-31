@@ -95,7 +95,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
             if let Some(ref p_vals) = arg.possible_vals {
                 debugln!("Validator::validate_arg_values: possible_vals={:?}", p_vals);
                 let val_str = val.to_string_lossy();
-                let ok = if arg.is_set(ArgSettings::CaseInsensitive) {
+                let ok = if arg.is_set(ArgSettings::IgnoreCase) {
                     p_vals.iter().any(|pv| pv.eq_ignore_ascii_case(&*val_str))
                 } else {
                     p_vals.contains(&&*val_str)
@@ -110,7 +110,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                     ));
                 }
             }
-            if !arg.is_set(ArgSettings::EmptyValues) && val.is_empty_()
+            if !arg.is_set(ArgSettings::AllowEmptyValues) && val.is_empty_()
                 && matcher.contains(&*arg.name)
             {
                 debugln!("Validator::validate_arg_values: illegal empty val found");

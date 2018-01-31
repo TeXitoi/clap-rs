@@ -721,7 +721,7 @@ where
         if help_help {
             let mut pb = Arg::with_name("subcommand")
                 .index(1)
-                .set(ArgSettings::Multiple)
+                .setting(ArgSettings::Multiple)
                 .help("The subcommand whose help message to display");
             pb._build();
             parser.positionals.insert(1, pb.name);
@@ -754,11 +754,11 @@ where
         let arg_allows_tac = match needs_val_of {
             ParseResult::Opt(name) => {
                 let o = find!(self.app, &name).expect(INTERNAL_ERROR_MSG);
-                (o.is_set(ArgSettings::AllowLeadingHyphen) || app_wide_settings)
+                (o.is_set(ArgSettings::AllowHyphenValues) || app_wide_settings)
             }
             ParseResult::Pos(name) => {
                 let p = find!(self.app, &name).expect(INTERNAL_ERROR_MSG);
-                (p.is_set(ArgSettings::AllowLeadingHyphen) || app_wide_settings)
+                (p.is_set(ArgSettings::AllowHyphenValues) || app_wide_settings)
             }
             ParseResult::ValuesDone => return true,
             _ => false,
@@ -1061,7 +1061,7 @@ where
         debugln!("Parser::parse_opt; opt.settings={:?}", opt.settings);
         let mut has_eq = false;
         let no_val = val.is_none();
-        let empty_vals = opt.is_set(ArgSettings::EmptyValues);
+        let empty_vals = opt.is_set(ArgSettings::AllowEmptyValues);
         let min_vals_zero = opt.min_vals.unwrap_or(1) == 0;
         let needs_eq = opt.is_set(ArgSettings::RequireEquals);
 
