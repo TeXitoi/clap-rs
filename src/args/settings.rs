@@ -7,23 +7,23 @@ bitflags! {
     struct Flags: u32 {
         const REQUIRED         = 1;
         const MULTIPLE_OCC     = 1 << 1;
-        const EMPTY_VALS       = 1 << 2;
+        const EMPTY_VALS       = 1 << 2 | Self::TAKES_VAL.bits;
         const GLOBAL           = 1 << 3;
         const HIDDEN           = 1 << 4;
         const TAKES_VAL        = 1 << 5;
         const USE_DELIM        = 1 << 6;
         const NEXT_LINE_HELP   = 1 << 7;
         const R_UNLESS_ALL     = 1 << 8;
-        const REQ_DELIM        = 1 << 9;
+        const REQ_DELIM        = 1 << 9 | Self::TAKES_VAL.bits | Self::USE_DELIM.bits;
         const DELIM_NOT_SET    = 1 << 10;
-        const HIDE_POS_VALS    = 1 << 11;
-        const ALLOW_TAC_VALS   = 1 << 12;
-        const REQUIRE_EQUALS   = 1 << 13;
-        const LAST             = 1 << 14;
-        const HIDE_DEFAULT_VAL = 1 << 15;
+        const HIDE_POS_VALS    = 1 << 11 | Self::TAKES_VAL.bits;
+        const ALLOW_TAC_VALS   = 1 << 12 | Self::TAKES_VAL.bits;
+        const REQUIRE_EQUALS   = 1 << 13 | Self::TAKES_VAL.bits;
+        const LAST             = 1 << 14 | Self::TAKES_VAL.bits;
+        const HIDE_DEFAULT_VAL = 1 << 15 | Self::TAKES_VAL.bits;
         const CASE_INSENSITIVE = 1 << 16;
         const HIDE_ENV_VALS    = 1 << 17;
-        const MULTIPLE_VALS    = 1 << 18;
+        const MULTIPLE_VALS    = 1 << 18 | Self::TAKES_VAL.bits;
         const MULTIPLE         = Self::MULTIPLE_VALS.bits | Self::MULTIPLE_OCC.bits;
     }
 }
@@ -61,7 +61,7 @@ impl ArgFlags {
 }
 
 impl Default for ArgFlags {
-    fn default() -> Self { ArgFlags(Flags::EMPTY_VALS | Flags::DELIM_NOT_SET) }
+    fn default() -> Self { ArgFlags(Flags::DELIM_NOT_SET) }
 }
 
 /// Various settings that apply to arguments and may be set, unset, and checked via getter/setter
@@ -71,14 +71,16 @@ impl Default for ArgFlags {
 /// [`Arg::is_set`]: ./struct.Arg.html#method.is_set
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ArgSettings {
-    /// Sets whether or not the argument is required by default. Required by default means it is
-    /// required, when no other conflicting rules have been evaluated. Conflicting rules take
-    /// precedence over being required. **Default:** `false`
+    /// Specifies that the argument is required by default. Required by default means it is
+    /// required, when no other conflicting rules or overrides have been evaluated. Conflicting
+    /// rules take precedence over being required.
     ///
-    /// **NOTE:** Flags (i.e. not positional, or arguments that take values) cannot be required by
-    /// default. This is simply because if a flag should be required, it should simply be implied
-    /// as no additional information is required from user. Flags by their very nature are simply
-    /// yes/no, or true/false.
+    /// **Pro tip:** Flags (i.e. not positional, or arguments that take values) shouldn't be
+    /// required by default. This is because if a flag were to be required, it should simply be
+    /// implied. No additional information is required from user. Flags by their very nature are
+    /// simply boolean on/off switches. The only time a user *should* be required to use a flag
+    /// is if the operation is destructive in nature, and the user is essentially proving to you,
+    /// "Yes, I know what I'm doing."
     ///
     /// # Examples
     ///
@@ -89,14 +91,13 @@ pub enum ArgSettings {
     /// # ;
     /// ```
     ///
-    /// Setting [`Arg::setting(ArgSettings::Required)`] requires that the argument be used at runtime.
+    /// Setting [`Required`] requires that the argument be used at runtime.
     ///
     /// ```rust
     /// # use clap::{App, Arg, ArgSettings};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("cfg")
-    ///         .setting(ArgSettings::Required)
-    ///         .takes_value(true)
+    ///         .settings(&[ArgSettings::Required, ArgSettings::TakesValue])
     ///         .long("config"))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "--config", "file.conf"
@@ -105,14 +106,13 @@ pub enum ArgSettings {
     /// assert!(res.is_ok());
     /// ```
     ///
-    /// Setting [`Arg::setting(ArgSettings::Required)`] and *not* supplying that argument is an error.
+    /// Not setting [`Required`] and then *not* supplying that argument at runtime is an error.
     ///
     /// ```rust
     /// # use clap::{App, Arg, ArgSettings, ErrorKind};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("cfg")
-    ///         .setting(ArgSettings::Required)
-    ///         .takes_value(true)
+    ///         .settings(&[ArgSettings::Required, ArgSettings::TakesValue])
     ///         .long("config"))
     ///     .get_matches_from_safe(vec![
     ///         "prog"
@@ -121,40 +121,34 @@ pub enum ArgSettings {
     /// assert!(res.is_err());
     /// assert_eq!(res.unwrap_err().kind, ErrorKind::MissingRequiredArgument);
     /// ```
-    /// [`Arg::setting(ArgSettings::Required)`]: ./enum.ArgSettings.html#variant.Required
+    /// [`Required`]: ./enum.ArgSettings.html#variant.Required
     Required,
-    /// Specifies that the argument may appear more than once. For flags, this results
-    /// in the number of occurrences of the flag being recorded. For example `-ddd` or `-d -d -d`
-    /// would count as three occurrences. For options there is a distinct difference in multiple
-    /// occurrences vs multiple values.
+    /// Specifies that the argument may appear more than once ([`MultipleOccurrences`]) *and* may
+    /// have an unknown number of multiple values ([`MultipleValues`]).
     ///
-    /// For example, `--opt val1 val2` is one occurrence, but two values. Whereas
-    /// `--opt val1 --opt val2` is two occurrences.
+    /// This is merely a convience setting for implying both and is analogous to the old
+    /// `Arg::multiple(true)` method
     ///
     /// **WARNING:**
     ///
-    /// Setting `multiple(true)` for an [option] with no other details, allows multiple values
-    /// **and** multiple occurrences because it isn't possible to have more occurrences than values
-    /// for options. Because multiple values are allowed, `--option val1 val2 val3` is perfectly
-    /// valid, be careful when designing a CLI where positional arguments are expected after a
-    /// option which accepts multiple values, as `clap` will continue parsing *values* until it
-    /// reaches the max or specific number of values defined, or another flag or option.
+    /// Setting `Multiple` for an argument that takes a value, but with no other details can be
+    /// dangerous in some circumstances. Because multiple values are allowed,
+    /// `--option val1 val2 val3` is perfectly valid. Be careful when designing a CLI where
+    /// positional arguments are *also* expected as `clap` will continue parsing *values* until one
+    /// of the following happens:
     ///
-    /// **Pro Tip**:
-    ///
-    /// It's possible to define an option which allows multiple occurrences, but only one value per
-    /// occurrence. To do this use [`Arg::number_of_values(1)`] in coordination with
-    /// [`Arg::multiple(true)`].
+    /// * It reaches the [maximum number of values]
+    /// * It reaches a [specific number of values]
+    /// * It finds another flag or option (i.e. something that starts with a `-`)
     ///
     /// **WARNING:**
     ///
-    /// When using args with `multiple(true)` on [options] or [positionals] (i.e. those args that
-    /// accept values) and [subcommands], one needs to consider the posibility of an argument value
-    /// being the same as a valid subcommand. By default `clap` will parse the argument in question
-    /// as a value *only if* a value is possible at that moment. Otherwise it will be parsed as a
-    /// subcommand. In effect, this means using `multiple(true)` with no additional parameters and
-    /// a possible value that coincides with a subcommand name, the subcommand cannot be called
-    /// unless another argument is passed first.
+    /// When using args with `Multiple` and [subcommands], one needs to consider the posibility of
+    /// an argument value being the same as a valid subcommand. By default `clap` will parse the
+    /// argument in question as a value *only if* a value is possible at that moment. Otherwise it
+    /// will be parsed as a subcommand. In effect, this means using `Multiple` with no additional
+    /// parameters and a value that coincides with a subcommand name, the subcommand cannot be
+    /// called unless another argument is passed between them.
     ///
     /// As an example, consider a CLI with an option `--ui-paths=<paths>...` and subcommand `signer`
     ///
@@ -165,11 +159,67 @@ pub enum ArgSettings {
     /// ```
     ///
     /// This is because `--ui-paths` accepts multiple values. `clap` will continue parsing values
-    /// until another argument is reached and it knows `--ui-paths` is done.
+    /// until another argument is reached and it knows `--ui-paths` is done parsing.
     ///
     /// By adding additional parameters to `--ui-paths` we can solve this issue. Consider adding
-    /// [`Arg::number_of_values(1)`] as discussed above. The following are all valid, and `signer`
-    /// is parsed as both a subcommand and a value in the second case.
+    /// [`Arg::number_of_values(1)`] or using *only* [`MultipleOccurrences`]. The following are all
+    /// valid, and `signer` is parsed as a subcommand in the first case, but a value in the second
+    /// case.
+    ///
+    /// ```notrust
+    /// $ program --ui-paths path1 signer
+    /// $ program --ui-paths path1 --ui-paths signer signer
+    /// ```
+    ///
+    /// [`MultipleOccurrences`]: ./enum.ArgSettings.html#variant.MultipleOccurrences
+    /// [`MultipleValues`]: ./enum.ArgSettings.html#variant.MultipleValues
+    /// [maximum number of values]: ./struct.Arg.html#method.max_values
+    /// [specific number of values]: ./struct.Arg.html#method.number_of_values
+    /// [subcommands]: ./struct.App.html#method.subcommand
+    Multiple,
+    /// Specifies that the argument may have an unknown number of multiple values. Without any other
+    /// settings, this argument may appear only *once*.
+    ///
+    /// For example, `--opt val1 val2` is allowed, but `--opt val1 val2 --opt val3` is not.
+    ///
+    /// **NOTE:** Implicitly sets [`ArgSettings::TakesValue`]
+    ///
+    /// **WARNING:**
+    ///
+    /// Setting `MultipleValues` for an argument that takes a value, but with no other details can
+    /// be dangerous in some circumstances. Because multiple values are allowed,
+    /// `--option val1 val2 val3` is perfectly valid. Be careful when designing a CLI where
+    /// positional arguments are *also* expected as `clap` will continue parsing *values* until one
+    /// of the following happens:
+    ///
+    /// * It reaches the [maximum number of values]
+    /// * It reaches a [specific number of values]
+    /// * It finds another flag or option (i.e. something that starts with a `-`)
+    ///
+    /// **WARNING:**
+    ///
+    /// When using args with `MultipleValues` and [subcommands], one needs to consider the
+    /// posibility of an argument value being the same as a valid subcommand. By default `clap` will
+    /// parse the argument in question as a value *only if* a value is possible at that moment.
+    /// Otherwise it will be parsed as a subcommand. In effect, this means using `Multiple` with no
+    /// additional parameters and a value that coincides with a subcommand name, the subcommand
+    /// cannot be called unless another argument is passed between them.
+    ///
+    /// As an example, consider a CLI with an option `--ui-paths=<paths>...` and subcommand `signer`
+    ///
+    /// The following would be parsed as values to `--ui-paths`.
+    ///
+    /// ```notrust
+    /// $ program --ui-paths path1 path2 signer
+    /// ```
+    ///
+    /// This is because `--ui-paths` accepts multiple values. `clap` will continue parsing values
+    /// until another argument is reached and it knows `--ui-paths` is done parsing.
+    ///
+    /// By adding additional parameters to `--ui-paths` we can solve this issue. Consider adding
+    /// [`Arg::number_of_values(1)`] or using *only* [`MultipleOccurrences`]. The following are all
+    /// valid, and `signer` is parsed as a subcommand in the first case, but a value in the second
+    /// case.
     ///
     /// ```notrust
     /// $ program --ui-paths path1 signer
@@ -179,19 +229,19 @@ pub enum ArgSettings {
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// Arg::with_name("debug")
     ///     .short("d")
-    ///     .multiple(true)
+    ///     .setting(ArgSettings::MultipleValues)
     /// # ;
     /// ```
     /// An example with flags
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("verbose")
-    ///         .multiple(true)
+    ///         .setting(ArgSettings::MultipleValues)
     ///         .short("v"))
     ///     .get_matches_from(vec![
     ///         "prog", "-v", "-v", "-v"    // note, -vvv would have same result
@@ -204,11 +254,10 @@ pub enum ArgSettings {
     /// An example with options
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("file")
-    ///         .multiple(true)
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::MultipleValues) // implies TakesValue
     ///         .short("F"))
     ///     .get_matches_from(vec![
     ///         "prog", "-F", "file1", "file2", "file3"
@@ -219,35 +268,29 @@ pub enum ArgSettings {
     /// let files: Vec<_> = m.values_of("file").unwrap().collect();
     /// assert_eq!(files, ["file1", "file2", "file3"]);
     /// ```
-    /// This is functionally equivilant to the example above
+    /// Although `MultipleVlaues` has been specified, we cannot use the argument more than once.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
-    /// let m = App::new("prog")
+    /// # use clap::{App, Arg, ErrorKind, ArgSettings};
+    /// let res = App::new("prog")
     ///     .arg(Arg::with_name("file")
-    ///         .multiple(true)
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::MultipleValues) // implies TakesValue
     ///         .short("F"))
-    ///     .get_matches_from(vec![
+    ///     .try_get_matches_from(vec![
     ///         "prog", "-F", "file1", "-F", "file2", "-F", "file3"
     ///     ]);
-    /// let files: Vec<_> = m.values_of("file").unwrap().collect();
-    /// assert_eq!(files, ["file1", "file2", "file3"]);
-    ///
-    /// assert!(m.is_present("file"));
-    /// assert_eq!(m.occurrences_of("file"), 3); // Notice 3 occurrences
-    /// let files: Vec<_> = m.values_of("file").unwrap().collect();
-    /// assert_eq!(files, ["file1", "file2", "file3"]);
+    /// assert!(res.is_err());
+    /// assert_eq!(res.unwrap_err().kind, ErrorKind::UnexpectedMultipleOccurrences)
     /// ```
     ///
-    /// A common mistake is to define an option which allows multiples, and a positional argument
+    /// A common mistake is to define an option which allows multiple values, and a positional
+    /// argument.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("file")
-    ///         .multiple(true)
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::MultipleValues) // implies TakesValue
     ///         .short("F"))
     ///     .arg(Arg::with_name("word")
     ///         .index(1))
@@ -260,20 +303,18 @@ pub enum ArgSettings {
     /// assert_eq!(files, ["file1", "file2", "file3", "word"]); // wait...what?!
     /// assert!(!m.is_present("word")); // but we clearly used word!
     /// ```
-    /// The problem is clap doesn't know when to stop parsing values for "files". This is further
+    /// The problem is `clap` doesn't know when to stop parsing values for "files". This is further
     /// compounded by if we'd said `word -F file1 file2` it would have worked fine, so it would
     /// appear to only fail sometimes...not good!
     ///
-    /// A solution for the example above is to specify that `-F` only accepts one value, but is
-    /// allowed to appear multiple times
+    /// A solution for the example above is to limit how many values with a [maxium], or [specific]
+    /// number, or to say [`MultipleOccurrences`] is ok, but multiple values is not.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("file")
-    ///         .multiple(true)
-    ///         .takes_value(true)
-    ///         .number_of_values(1)
+    ///         .settings(&[ArgSettings::MultipleOccurrences, ArgSettings::TakesValue])
     ///         .short("F"))
     ///     .arg(Arg::with_name("word")
     ///         .index(1))
@@ -287,74 +328,146 @@ pub enum ArgSettings {
     /// assert!(m.is_present("word"));
     /// assert_eq!(m.value_of("word"), Some("word"));
     /// ```
-    /// As a final example, notice if we define [`Arg::number_of_values(1)`] and try to run the
-    /// problem example above, it would have been a runtime error with a pretty message to the
-    /// user :)
+    /// As a final example, let's fix the above error and get a pretty message to the user :)
     ///
     /// ```rust
-    /// # use clap::{App, Arg, ErrorKind};
+    /// # use clap::{App, Arg, ArgSettings, ErrorKind};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("file")
-    ///         .multiple(true)
-    ///         .takes_value(true)
-    ///         .number_of_values(1)
+    ///         .settings(&[ArgSettings::MultipleOccurrences, ArgSettings::TakesValue])
     ///         .short("F"))
     ///     .arg(Arg::with_name("word")
     ///         .index(1))
-    ///     .get_matches_from_safe(vec![
+    ///     .try_get_matches_from(vec![
     ///         "prog", "-F", "file1", "file2", "file3", "word"
     ///     ]);
     ///
     /// assert!(res.is_err());
     /// assert_eq!(res.unwrap_err().kind, ErrorKind::UnknownArgument);
     /// ```
-    /// [option]: ./struct.Arg.html#method.takes_value
-    /// [options]: ./struct.Arg.html#method.takes_value
-    /// [subcommands]: ./struct.SubCommand.html
+    /// [option]: ./enum.ArgSettings.html#variant.TakesValue
+    /// [options]: ./enum.ArgSettings.html#variant.TakesValue
+    /// [subcommands]: ./struct.App.html#method.subcommand
     /// [positionals]: ./struct.Arg.html#method.index
     /// [`Arg::number_of_values(1)`]: ./struct.Arg.html#method.number_of_values
-    /// [`Arg::multiple(true)`]: ./struct.Arg.html#method.multiple
-    Multiple,
-    // @TODO @docs @release @v3-alpha: Write docs
-    /// Allows Multiple Values
+    /// [`MultipleOccurrences`]: ./enum.ArgSettings.html#variant.MultipleOccurrences
+    /// [`MultipleValues`]: ./enum.ArgSettings.html#variant.MultipleValues
+    /// [maximum number of values]: ./struct.Arg.html#method.max_values
+    /// [specific number of values]: ./struct.Arg.html#method.number_of_values
+    /// [maximum]: ./struct.Arg.html#method.max_values
+    /// [specific]: ./struct.Arg.html#method.number_of_values
     MultipleValues,
-    // @TODO @docs @release @v3-alpha: Write docs
-    /// Allows Multiple Occurrences
-    MultipleOccurrences,
-    /// Allows an argument to accept explicitly empty values. An empty value must be specified at
-    /// the command line with an explicit `""`, or `''`
+    /// Specifies that the argument may appear more than once.
+    /// For flags, this results
+    /// in the number of occurrences of the flag being recorded. For example `-ddd` or `-d -d -d`
+    /// would count as three occurrences. For options or arguments that take a value, this
+    /// *does not* affect how many values they can accept. (i.e. only one at a time is allowed)
     ///
-    /// **NOTE:** Defaults to `true` (Explicitly empty values are allowed)
-    ///
-    /// **NOTE:** Implicitly sets [`Arg::takes_value(true)`] when set to `false`
+    /// For example, `--opt val1 --opt val2` is allowed, but `--opt val1 val2` is not.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
-    /// Arg::with_name("file")
-    ///     .long("file")
-    ///     .empty_values(false)
+    /// # use clap::{App, Arg, ArgSettings};
+    /// Arg::with_name("debug")
+    ///     .short("d")
+    ///     .setting(ArgSettings::MultipleOccurrences)
     /// # ;
     /// ```
-    /// The default is to allow empty values, such as `--option ""` would be an empty value. But
-    /// we can change to make empty values become an error.
+    /// An example with flags
     ///
     /// ```rust
-    /// # use clap::{App, Arg, ErrorKind};
+    /// # use clap::{App, Arg, ArgSettings};
+    /// let m = App::new("prog")
+    ///     .arg(Arg::with_name("verbose")
+    ///         .setting(ArgSettings::MultipleOccurrences)
+    ///         .short("v"))
+    ///     .get_matches_from(vec![
+    ///         "prog", "-v", "-v", "-v"    // note, -vvv would have same result
+    ///     ]);
+    ///
+    /// assert!(m.is_present("verbose"));
+    /// assert_eq!(m.occurrences_of("verbose"), 3);
+    /// ```
+    ///
+    /// An example with options
+    ///
+    /// ```rust
+    /// # use clap::{App, Arg, ArgSettings};
+    /// let m = App::new("prog")
+    ///     .arg(Arg::with_name("file")
+    ///         .settings(&[ArgSettings::MultipleOccurrences, ArgSettings::TakesValue])
+    ///         .short("F"))
+    ///     .get_matches_from(vec![
+    ///         "prog", "-F", "file1", "-F", file2", "-F", "file3"
+    ///     ]);
+    ///
+    /// assert!(m.is_present("file"));
+    /// assert_eq!(m.occurrences_of("file"), 1); // notice only one occurrence
+    /// let files: Vec<_> = m.values_of("file").unwrap().collect();
+    /// assert_eq!(files, ["file1", "file2", "file3"]);
+    /// ```
+    /// [option]: ./enum.ArgSettings.html#variant.TakesValue
+    /// [options]: ./enum.ArgSettings.html#variant.TakesValue
+    /// [subcommands]: ./struct.App.html#method.subcommand
+    /// [positionals]: ./struct.Arg.html#method.index
+    /// [`Arg::number_of_values(1)`]: ./struct.Arg.html#method.number_of_values
+    /// [`MultipleOccurrences`]: ./enum.ArgSettings.html#variant.MultipleOccurrences
+    /// [`MultipleValues`]: ./enum.ArgSettings.html#variant.MultipleValues
+    /// [maximum number of values]: ./struct.Arg.html#method.max_values
+    /// [specific number of values]: ./struct.Arg.html#method.number_of_values
+    /// [maximum]: ./struct.Arg.html#method.max_values
+    /// [specific]: ./struct.Arg.html#method.number_of_values
+    MultipleOccurrences,
+    /// Allows an argument to accept explicitly empty values. An empty value must be specified at
+    /// the command line with an explicit `""`, `''`, or `--option=`
+    ///
+    /// **NOTE:** By default empty values are *not* allowed
+    ///
+    /// **NOTE:** Implicitly sets [`ArgSettings::TakesValue`]
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use clap::{App, Arg, ArgSettings};
+    /// Arg::with_name("file")
+    ///     .long("file")
+    ///     .setting(ArgSettings::AllowEmptyValues)
+    /// # ;
+    /// ```
+    /// The default is to *not* allow empty values.
+    ///
+    /// ```rust
+    /// # use clap::{App, Arg, ErrorKind, ArgSettings};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("cfg")
     ///         .long("config")
     ///         .short("v")
-    ///         .empty_values(false))
-    ///     .get_matches_from_safe(vec![
+    ///         .setting(ArgSettings::TakesValue))
+    ///     .try_get_matches_from(vec![
     ///         "prog", "--config="
     ///     ]);
     ///
     /// assert!(res.is_err());
     /// assert_eq!(res.unwrap_err().kind, ErrorKind::EmptyValue);
     /// ```
-    /// [`Arg::takes_value(true)`]: ./struct.Arg.html#method.takes_value
+    /// By adding this setting, we can allow empty values
+    ///
+    /// ```rust
+    /// # use clap::{App, Arg, ArgSettings};
+    /// let res = App::new("prog")
+    ///     .arg(Arg::with_name("cfg")
+    ///         .long("config")
+    ///         .short("v")
+    ///         .setting(ArgSettings::AllowEmptyValues)) // implies TakesValue
+    ///     .try_get_matches_from(vec![
+    ///         "prog", "--config="
+    ///     ]);
+    ///
+    /// assert!(res.is_ok());
+    /// assert_eq!(res.unwrap().value_of("config"), Some(""));
+    /// ```
+    /// [`ArgSettings::TakesValue`]: ./enum.ArgSettings.html#variant.TakesValue
     AllowEmptyValues,
     /// Specifies that an argument can be matched to all child [`SubCommand`]s.
     ///
@@ -366,10 +479,10 @@ pub enum ArgSettings {
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// Arg::with_name("debug")
     ///     .short("d")
-    ///     .global(true)
+    ///     .setting(ArgSettings::Global)
     /// # ;
     /// ```
     ///
@@ -378,12 +491,12 @@ pub enum ArgSettings {
     /// want to clutter the source with three duplicate [`Arg`] definitions.
     ///
     /// ```rust
-    /// # use clap::{App, Arg, SubCommand};
+    /// # use clap::{App, Arg, SubCommand, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("verb")
     ///         .long("verbose")
     ///         .short("v")
-    ///         .global(true))
+    ///         .setting(ArgSettings::Global))
     ///     .subcommand(SubCommand::with_name("test"))
     ///     .subcommand(SubCommand::with_name("do-stuff"))
     ///     .get_matches_from(vec![
@@ -394,8 +507,8 @@ pub enum ArgSettings {
     /// let sub_m = m.subcommand_matches("do-stuff").unwrap();
     /// assert!(sub_m.is_present("verb"));
     /// ```
-    /// [`SubCommand`]: ./struct.SubCommand.html
-    /// [required]: ./struct.Arg.html#method.required
+    /// [`SubCommand`]: ./struct.App.html#method.subcommand
+    /// [required]: ./enum.ArgSettings.html#variant.Required
     /// [`ArgMatches`]: ./struct.ArgMatches.html
     /// [`ArgMatches::is_present("flag")`]: ./struct.ArgMatches.html#method.is_present
     /// [`Arg`]: ./struct.Arg.html
@@ -407,19 +520,19 @@ pub enum ArgSettings {
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// Arg::with_name("debug")
-    ///     .hidden(true)
+    ///     .setting(ArgSettings::Hidden)
     /// # ;
     /// ```
-    /// Setting `hidden(true)` will hide the argument when displaying help text
+    /// Setting `Hidden` will hide the argument when displaying help text
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("cfg")
     ///         .long("config")
-    ///         .hidden(true)
+    ///         .setting(ArgSettings::Hidden)
     ///         .help("Some help text describing the --config arg"))
     ///     .get_matches_from(vec![
     ///         "prog", "--help"
@@ -450,23 +563,24 @@ pub enum ArgSettings {
     /// **NOTE:** By default, args which allow [multiple values] are delimited by commas, meaning
     /// `--option=val1,val2,val3` is three values for the `--option` argument. If you wish to
     /// change the delimiter to another character you can use [`Arg::value_delimiter(char)`],
-    /// alternatively you can turn delimiting values **OFF** by using [`Arg::use_delimiter(false)`]
+    /// alternatively you can turn delimiting values **OFF** by using
+    /// [`Arg::unset_setting(ArgSettings::UseValueDelimiter`]
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// Arg::with_name("config")
-    ///     .takes_value(true)
+    ///     .setting(ArgSettings::TakesValue)
     /// # ;
     /// ```
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("mode")
     ///         .long("mode")
-    ///         .takes_value(true))
+    ///         .setting(ArgSettings::TakesValue))
     ///     .get_matches_from(vec![
     ///         "prog", "--mode", "fast"
     ///     ]);
@@ -475,27 +589,29 @@ pub enum ArgSettings {
     /// assert_eq!(m.value_of("mode"), Some("fast"));
     /// ```
     /// [`Arg::value_delimiter(char)`]: ./struct.Arg.html#method.value_delimiter
-    /// [`Arg::use_delimiter(false)`]: ./struct.Arg.html#method.use_delimiter
-    /// [multiple values]: ./struct.Arg.html#method.multiple
+    /// [`Arg::unset_setting(ArgSettings::UseValueDelimiter`]: ./enum.ArgSettings.html#variant.UseValueDelimiter
+    /// [multiple values]: ./enum.ArgSettings.html#variant.MultipleValues
     TakesValue,
-    /// Specifies whether or not an argument should allow grouping of multiple values via a
+    /// Specifies that an argument should allow grouping of multiple values via a
     /// delimiter. I.e. should `--option=val1,val2,val3` be parsed as three values (`val1`, `val2`,
     /// and `val3`) or as a single value (`val1,val2,val3`). Defaults to using `,` (comma) as the
     /// value delimiter for all arguments that accept values (options and positional arguments)
     ///
-    /// **NOTE:** The default is `false`. When set to `true` the default [`Arg::value_delimiter`]
-    /// is the comma `,`.
+    /// **NOTE:** When this setting is used, it will default [`Arg::value_delimiter`]
+    /// to the comma `,`.
+    ///
+    /// **NOTE:** Implicitly sets [`ArgSettings::TakesValue`]
     ///
     /// # Examples
     ///
     /// The following example shows the default behavior.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let delims = App::new("prog")
     ///     .arg(Arg::with_name("option")
     ///         .long("option")
-    ///         .use_delimiter(true)
+    ///         .setting(ArgSettings::UseValueDelimter)
     ///         .takes_value(true))
     ///     .get_matches_from(vec![
     ///         "prog", "--option=val1,val2,val3",
@@ -509,12 +625,11 @@ pub enum ArgSettings {
     /// behavior
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let nodelims = App::new("prog")
     ///     .arg(Arg::with_name("option")
     ///         .long("option")
-    ///         .use_delimiter(false)
-    ///         .takes_value(true))
+    ///         .setting(ArgSettings::TakesValue))
     ///     .get_matches_from(vec![
     ///         "prog", "--option=val1,val2,val3",
     ///     ]);
@@ -535,17 +650,16 @@ pub enum ArgSettings {
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("opt")
     ///         .long("long-option-flag")
     ///         .short("o")
-    ///         .takes_value(true)
+    ///         .settings(&[ArgSettings::TakesValue, ArgSettings::NextLineHelp])
     ///         .value_names(&["value1", "value2"])
     ///         .help("Some really long help and complex\n\
     ///                help that makes more sense to be\n\
-    ///                on a line after the option")
-    ///         .next_line_help(true))
+    ///                on a line after the option"))
     ///     .get_matches_from(vec![
     ///         "prog", "--help"
     ///     ]);
@@ -578,7 +692,8 @@ pub enum ArgSettings {
     ///
     /// **NOTE:** The default is `false`.
     ///
-    /// **NOTE:** Setting this to true implies [`Arg::use_delimiter(true)`]
+    /// **NOTE:** Setting this implies [`ArgSettings::UseValueDelimiter`] and
+    /// [`ArgSettings::TakesValue`]
     ///
     /// **NOTE:** It's a good idea to inform the user that use of a delimiter is required, either
     /// through help text or other means.
@@ -589,13 +704,11 @@ pub enum ArgSettings {
     /// everything works in this first example, as we use a delimiter, as expected.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let delims = App::new("prog")
     ///     .arg(Arg::with_name("opt")
     ///         .short("o")
-    ///         .takes_value(true)
-    ///         .multiple(true)
-    ///         .require_delimiter(true))
+    ///         .setings(&[ArgSettings::RequireDelimiter, ArgSettings::MultipleValues]))
     ///     .get_matches_from(vec![
     ///         "prog", "-o", "val1,val2,val3",
     ///     ]);
@@ -606,13 +719,11 @@ pub enum ArgSettings {
     /// In this next example, we will *not* use a delimiter. Notice it's now an error.
     ///
     /// ```rust
-    /// # use clap::{App, Arg, ErrorKind};
+    /// # use clap::{App, Arg, ErrorKind, ArgSettings};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("opt")
     ///         .short("o")
-    ///         .takes_value(true)
-    ///         .multiple(true)
-    ///         .require_delimiter(true))
+    ///         .seting(ArgSettings::RequireDelimiter))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "-o", "val1", "val2", "val3",
     ///     ]);
@@ -629,12 +740,11 @@ pub enum ArgSettings {
     /// is *not* an error.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let delims = App::new("prog")
     ///     .arg(Arg::with_name("opt")
     ///         .short("o")
-    ///         .takes_value(true)
-    ///         .multiple(true))
+    ///         .setting(ArgSettings::MultipleValues))
     ///     .get_matches_from(vec![
     ///         "prog", "-o", "val1", "val2", "val3",
     ///     ]);
@@ -642,7 +752,8 @@ pub enum ArgSettings {
     /// assert!(delims.is_present("opt"));
     /// assert_eq!(delims.values_of("opt").unwrap().collect::<Vec<_>>(), ["val1", "val2", "val3"]);
     /// ```
-    /// [`Arg::use_delimiter(true)`]: ./struct.Arg.html#method.use_delimiter
+    /// [`ArgSettings::UseValueDelimiter`]: ./enum.ArgSettings.html#variant.UseValueDelimiter
+    /// [`ArgSettings::TakesValue`]: ./enum.ArgSettings.html#variant.TakesValue
     RequireDelimiter,
     /// Specifies if the possible values of an argument should be displayed in the help text or
     /// not. Defaults to `false` (i.e. show possible values)
@@ -650,35 +761,37 @@ pub enum ArgSettings {
     /// This is useful for args with many values, or ones which are explained elsewhere in the
     /// help text.
     ///
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
+    ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// Arg::with_name("config")
-    ///     .hide_possible_values(true)
+    ///     .setting(ArgSettings::HidePossibleValues)
     /// # ;
     /// ```
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("mode")
     ///         .long("mode")
     ///         .possible_values(&["fast", "slow"])
-    ///         .takes_value(true)
-    ///         .hide_possible_values(true));
-    ///
+    ///         .setting(ArgSettings::HidePossibleValues))
     /// ```
-    ///
     /// If we were to run the above program with `--help` the `[values: fast, slow]` portion of
     /// the help text would be omitted.
     HidePossibleValues,
     /// Allows values which start with a leading hyphen (`-`)
     ///
-    /// **WARNING**: Take caution when using this setting combined with [`Arg::multiple(true)`], as
-    /// this becomes ambiguous `$ prog --arg -- -- val`. All three `--, --, val` will be values
-    /// when the user may have thought the second `--` would constitute the normal, "Only
-    /// positional args follow" idiom. To fix this, consider using [`Arg::number_of_values(1)`]
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
+    ///
+    /// **WARNING**: Take caution when using this setting combined with
+    /// [`ArgSettings::MultipleValues`], as this becomes ambiguous `$ prog --arg -- -- val`. All
+    /// three `--, --, val` will be values when the user may have thought the second `--` would
+    /// constitute the normal, "Only positional args follow" idiom. To fix this, consider using
+    /// [`ArgSettings::MultipleOccurrences`] which only allows a single value at a time.
     ///
     /// **WARNING**: When building your CLIs, consider the effects of allowing leading hyphens and
     /// the user passing in a value that matches a valid short. For example `prog -opt -F` where
@@ -690,18 +803,17 @@ pub enum ArgSettings {
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::Arg;
+    /// # use clap::{Arg, ArgSettings};
     /// Arg::with_name("pattern")
-    ///     .allow_hyphen_values(true)
+    ///     .setting(ArgSettings::AllowHyphenValues)
     /// # ;
     /// ```
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("prog")
     ///     .arg(Arg::with_name("pat")
-    ///         .allow_hyphen_values(true)
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::AllowHyphenValues)
     ///         .long("pattern"))
     ///     .get_matches_from(vec![
     ///         "prog", "--pattern", "-file"
@@ -717,7 +829,7 @@ pub enum ArgSettings {
     /// # use clap::{App, Arg, ErrorKind};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("pat")
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::TakesValue)
     ///         .long("pattern"))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "--pattern", "-file"
@@ -726,36 +838,34 @@ pub enum ArgSettings {
     /// assert!(res.is_err());
     /// assert_eq!(res.unwrap_err().kind, ErrorKind::UnknownArgument);
     /// ```
-    /// [`Arg::allow_hyphen_values(true)`]: ./struct.Arg.html#method.allow_hyphen_values
-    /// [`Arg::multiple(true)`]: ./struct.Arg.html#method.multiple
+    /// [`ArgSettings::AllowHyphenValues`]: ./enum.ArgSettings.html#variant.AllowHyphenValues
+    /// [`ArgSettings::MultipleValues`]: ./enum.ArgSettings.html#variant.MultipleValues
+    /// [`ArgSettings::MultipleOccurrences`]: ./enum.ArgSettings.html#variant.MultipleOccurrences
     /// [`Arg::number_of_values(1)`]: ./struct.Arg.html#method.number_of_values
     AllowHyphenValues,
     /// Requires that options use the `--option=val` syntax (i.e. an equals between the option and
     /// associated value) **Default:** `false`
     ///
-    /// **NOTE:** This setting also removes the default of allowing empty values and implies
-    /// [`Arg::empty_values(false)`].
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::Arg;
+    /// # use clap::{Arg, ArgSettings};
     /// Arg::with_name("config")
     ///     .long("config")
-    ///     .takes_value(true)
-    ///     .require_equals(true)
+    ///     .setting(ArgSettings::RequireEquals)
     /// # ;
     /// ```
     ///
-    /// Setting [`Arg::require_equals(true)`] requires that the option have an equals sign between
+    /// Setting [`RequireEquals`] requires that the option have an equals sign between
     /// it and the associated value.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("cfg")
-    ///         .require_equals(true)
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::RequireEquals)
     ///         .long("config"))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "--config=file.conf"
@@ -764,15 +874,14 @@ pub enum ArgSettings {
     /// assert!(res.is_ok());
     /// ```
     ///
-    /// Setting [`Arg::require_equals(true)`] and *not* supplying the equals will cause an error
-    /// unless [`Arg::empty_values(true)`] is set.
+    /// Setting [`RequireEquals`] and *not* supplying the equals will cause an error
+    /// unless [`ArgSettings::EmptyValues`] is set.
     ///
     /// ```rust
     /// # use clap::{App, Arg, ErrorKind};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("cfg")
-    ///         .require_equals(true)
-    ///         .takes_value(true)
+    ///         .setting(ArgSettings::RequireEquals)
     ///         .long("config"))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "--config", "file.conf"
@@ -781,9 +890,9 @@ pub enum ArgSettings {
     /// assert!(res.is_err());
     /// assert_eq!(res.unwrap_err().kind, ErrorKind::EmptyValue);
     /// ```
-    /// [`Arg::require_equals(true)`]: ./struct.Arg.html#method.require_equals
-    /// [`Arg::empty_values(true)`]: ./struct.Arg.html#method.empty_values
-    /// [`Arg::empty_values(false)`]: ./struct.Arg.html#method.empty_values
+    /// [`RequireEquals`]: ./enum.ArgSettings.html#variant.RequireEquals
+    /// [`ArgSettings::EmptyValues`]: ./enum.ArgSettings.html#variant.EmptyValues
+    /// [`ArgSettings::EmptyValues`]: ./enum.ArgSettings.html#variant.TakesValue
     RequireEquals,
     /// Specifies that this arg is the last, or final, positional argument (i.e. has the highest
     /// index) and is *only* able to be accessed via the `--` syntax (i.e. `$ prog args --
@@ -801,29 +910,32 @@ pub enum ArgSettings {
     /// **NOTE**: This setting only applies to positional arguments, and has no affect on FLAGS /
     /// OPTIONS
     ///
-    /// **CAUTION:** Setting an argument to `.last(true)` *and* having child subcommands is not
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
+    ///
+    /// **CAUTION:** Using this setting *and* having child subcommands is not
     /// recommended with the exception of *also* using [`AppSettings::ArgsNegateSubcommands`]
-    /// (or [`AppSettings::SubcommandsNegateReqs`] if the argument marked `.last(true)` is also
-    /// marked [`.setting(ArgSettings::Required)`])
+    /// (or [`AppSettings::SubcommandsNegateReqs`] if the argument marked `Last` is also
+    /// marked [`ArgSettings::Required`])
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::Arg;
+    /// # use clap::{Arg, ArgSettings};
     /// Arg::with_name("args")
-    ///     .last(true)
+    ///     .setting(ArgSettings::Last)
     /// # ;
     /// ```
     ///
-    /// Setting [`Arg::last(true)`] ensures the arg has the highest [index] of all positional args
+    /// Setting [`Last`] ensures the arg has the highest [index] of all positional args
     /// and requires that the `--` syntax be used to access it early.
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("first"))
     ///     .arg(Arg::with_name("second"))
-    ///     .arg(Arg::with_name("third").last(true))
+    ///     .arg(Arg::with_name("third")
+    ///         .setting(ArgSettings::Last))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "one", "--", "three"
     ///     ]);
@@ -834,7 +946,7 @@ pub enum ArgSettings {
     /// assert!(m.value_of("second").is_none());
     /// ```
     ///
-    /// Even if the positional argument marked `.last(true)` is the only argument left to parse,
+    /// Even if the positional argument marked `Last` is the only argument left to parse,
     /// failing to use the `--` syntax results in an error.
     ///
     /// ```rust
@@ -842,7 +954,8 @@ pub enum ArgSettings {
     /// let res = App::new("prog")
     ///     .arg(Arg::with_name("first"))
     ///     .arg(Arg::with_name("second"))
-    ///     .arg(Arg::with_name("third").last(true))
+    ///     .arg(Arg::with_name("third")
+    ///         .setting(ArgSettings::Last))
     ///     .get_matches_from_safe(vec![
     ///         "prog", "one", "two", "three"
     ///     ]);
@@ -850,57 +963,58 @@ pub enum ArgSettings {
     /// assert!(res.is_err());
     /// assert_eq!(res.unwrap_err().kind, ErrorKind::UnknownArgument);
     /// ```
-    /// [`Arg::last(true)`]: ./struct.Arg.html#method.last
     /// [index]: ./struct.Arg.html#method.index
     /// [`AppSettings::DontCollapseArgsInUsage`]: ./enum.AppSettings.html#variant.DontCollapseArgsInUsage
     /// [`AppSettings::ArgsNegateSubcommands`]: ./enum.AppSettings.html#variant.ArgsNegateSubcommands
     /// [`AppSettings::SubcommandsNegateReqs`]: ./enum.AppSettings.html#variant.SubcommandsNegateReqs
-    /// [`.setting(ArgSettings::Required)`]: ./struct.Arg.html#method.required
+    /// [`ArgSettings::Required`]: ./enum.ArgSetings.html#variant.Required
     /// [`UnknownArgument`]: ./enum.ErrorKind.html#variant.UnknownArgument
     Last,
-    /// Specifies if the default value of an argument should be displayed in the help text or
-    /// not. Defaults to `false` (i.e. show default value)
+    /// Specifies that the default value of an argument should not be displayed in the help text.
     ///
     /// This is useful when default behavior of an arg is explained elsewhere in the help text.
+    ///
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// Arg::with_name("config")
-    ///     .hide_default_value(true)
+    ///     .setting(ArgSettings::HideDefaultValue)
     /// # ;
     /// ```
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("connect")
     ///     .arg(Arg::with_name("host")
     ///         .long("host")
     ///         .default_value("localhost")
-    ///         .hide_default_value(true));
+    ///         .setting(ArgSettings::HideDefaultValue));
     ///
     /// ```
     ///
     /// If we were to run the above program with `--help` the `[default: localhost]` portion of
     /// the help text would be omitted.
     HideDefaultValue,
-    /// When used with [`Arg::possible_values`] it allows the argument value to pass validation even if
-    /// the case differs from that of the specified `possible_value`.
+    /// When used with [`Arg::possible_values`] it allows the argument value to pass validation even
+    /// if the case differs from that of the specified `possible_value`.
     ///
     /// **Pro Tip:** Use this setting with [`arg_enum!`]
+    ///
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// # use std::ascii::AsciiExt;
     /// let m = App::new("pv")
     ///     .arg(Arg::with_name("option")
     ///         .long("--option")
-    ///         .takes_value(true)
-    ///         .possible_value("test123")
-    ///         .case_insensitive(true))
+    ///         .setting(ArgSettings::IgnoreCase)
+    ///         .possible_value("test123"))
     ///     .get_matches_from(vec![
     ///         "pv", "--option", "TeSt123",
     ///     ]);
@@ -911,16 +1025,14 @@ pub enum ArgSettings {
     /// This setting also works when multiple values can be defined:
     ///
     /// ```rust
-    /// # use clap::{App, Arg};
+    /// # use clap::{App, Arg, ArgSettings};
     /// let m = App::new("pv")
     ///     .arg(Arg::with_name("option")
     ///         .short("-o")
     ///         .long("--option")
-    ///         .takes_value(true)
+    ///         .settings(&[ArgSettings::IgnoreCase, ArgSettings::MultipleValues])
     ///         .possible_value("test123")
-    ///         .possible_value("test321")
-    ///         .multiple(true)
-    ///         .case_insensitive(true))
+    ///         .possible_value("test321"))
     ///     .get_matches_from(vec![
     ///         "pv", "--option", "TeSt123", "teST123", "tESt321"
     ///     ]);
@@ -928,10 +1040,36 @@ pub enum ArgSettings {
     /// let matched_vals = m.values_of("option").unwrap().collect::<Vec<_>>();
     /// assert_eq!(&*matched_vals, &["TeSt123", "teST123", "tESt321"]);
     /// ```
-    /// [`Arg::case_insensitive(true)`]: ./struct.Arg.html#method.possible_values
     /// [`arg_enum!`]: ./macro.arg_enum.html
     IgnoreCase,
-    /// Hides ENV values in the help message
+    /// Specifies that any values inside the associated ENV variables of an argument should not be
+    /// displayed in the help text.
+    ///
+    /// This is useful when ENV vars contain sensitive values.
+    ///
+    /// **NOTE:** Setting this implies [`ArgSettings::TakesValue`]
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use clap::{App, Arg, ArgSettings};
+    /// Arg::with_name("config")
+    ///     .setting(ArgSettings::HideDefaultValue)
+    /// # ;
+    /// ```
+    ///
+    /// ```rust
+    /// # use clap::{App, Arg, ArgSettings};
+    /// let m = App::new("connect")
+    ///     .arg(Arg::with_name("host")
+    ///         .long("host")
+    ///         .env("CONNECT")
+    ///         .setting(ArgSettings::HideEnvValues));
+    ///
+    /// ```
+    ///
+    /// If we were to run the above program with `$ CONNECT=super_secret connect --help` the
+    /// `[default: CONNECT=super_secret]` portion of the help text would be omitted.
     HideEnvValues,
     #[doc(hidden)] RequiredUnlessAll,
     #[doc(hidden)] ValueDelimiterNotSet,
